@@ -1,0 +1,85 @@
+{
+  "strategy_name": "Asymmetric Risk D1/W1 Convexity Engine (Scaling-Out & Trend-Aligned)",
+  "timeframe": "1d",
+  "backtest": {
+    "initial_capital": 10000.0,
+    "risk_per_trade_pct": 2.0,
+    "start_year": 2021,
+    "end_year": 2026,
+    "symbols": [
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "AUDUSD",
+      "USDCAD",
+      "USDCHF",
+      "EURJPY",
+      "GBPJPY",
+      "XAUUSD",
+      "CL_OIL",
+      "SILVER",
+      "NAS100",
+      "SP500",
+      "BTCUSD",
+      "ETHUSD",
+      "SOLUSD"
+    ]
+  },
+  "mechanics": {
+    "donchian_breakout_period": 20,
+    "atr_period": 14,
+    "sl_atr_multiplier": 1.5,
+    "partial_tp_r": 2.0,
+    "partial_close_ratio": 0.50,
+    "be_trigger_r": 2.0,
+    "trailing_atr_multiplier": 2.5,
+    "require_ema200_alignment": true,
+    "slippage_pips": {
+      "EURUSD": 0.5,
+      "GBPUSD": 0.8,
+      "USDJPY": 0.8,
+      "AUDUSD": 0.6,
+      "USDCAD": 0.8,
+      "USDCHF": 0.8,
+      "EURJPY": 1.0,
+      "GBPJPY": 1.5,
+      "XAUUSD": 2.0,
+      "CL_OIL": 2.0,
+      "SILVER": 1.5,
+      "NAS100": 1.0,
+      "SP500": 0.5,
+      "BTCUSD": 10.0,
+      "ETHUSD": 1.0,
+      "SOLUSD": 0.2
+    }
+  },
+  "execution": {
+    "risk_per_trade_pct": 2.0,
+    "max_spread_multiplier": 2.0,
+    "magic_scaler": 260901,
+    "magic_runner": 260902
+  },
+  "telegram": {
+    "enabled": true,
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+    "chat_id": "YOUR_TELEGRAM_CHAT_ID",
+    "header_title": "Matematiksel Bot"
+  },
+  "rotational_selection": {
+    "enabled": true,
+    "scan_frequency_days": 5,
+    "max_active_universe": 16,
+    "admission_rank_threshold": 16,
+    "eviction_rank_threshold": 99,
+    "eviction_rules": {
+      "require_above_ema200": true,
+      "min_atr_pct": 0.8,
+      "max_consecutive_losses": 2,
+      "quarantine_days": 30
+    },
+    "graceful_exit": {
+      "tighten_stop_to_atr": 1.0,
+      "freeze_new_entries": true
+    }
+  }
+}

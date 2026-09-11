@@ -1,0 +1,224 @@
+import os
+import sys
+import json
+import logging
+from pathlib import Path
+from typing import List, Dict
+import pandas as pd
+import numpy as np
+import yfinance as yf
+
+# Windows UTF-8 desteği
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from engine.trend_detector import TrendDetector
+from engine.convexity_simulator import ConvexitySimulator, ConvexityTrade
+from analytics.performance_reporter import PerformanceReporter, ConvexityReport
+from analytics.benchmark_collector import BenchmarkCollector
+
+logging.basicConfig(level=logging.WARNING)
+
+TICKER_MAP = {
+    "XAUUSD": "GC=F",
+    "BTCUSD": "BTC-USD",
+    "ETHUSD": "ETH-USD"
+}
+
+def load_2018_data_with_warmup(symbol: str, cache_dir: Path) -> pd.DataFrame:
+    """2017-01-01'den itibaren veri çekerek 2018 yılı için 200 EMA warm-up sağlar."""
+    ticker = TICKER_MAP.get(symbol, symbol)
+    cache_file = cache_dir / f"{symbol}_2017_2019.csv"
+
+    df = pd.DataFrame()
+    if cache_file.exists():
+        try:
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+        except Exception:
+            df = pd.DataFrame()
+
+    if df.empty or len(df) < 200:
+        df = yf.download(ticker, start="2017-01-01", end="2019-01-15", interval="1d", progress=False)
+        if df.empty:
+            return pd.DataFrame()
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0].lower() for c in df.columns]
+        else:
+            df.columns = [c.lower() for c in df.columns]
+
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
+        else:
+            df.index = df.index.tz_convert("UTC")
+
+        df.sort_index(inplace=True)
+        for col in ["open", "high", "low", "close"]:
+            df[col] = df[col].astype(float)
+
+        df.to_csv(cache_file)
+
+    high = df["high"]
+    low = df["low"]
+    close_prev = df["close"].shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - close_prev).abs(),
+        (low - close_prev).abs()
+    ], axis=1).max(axis=1)
+    df["atr14"] = tr.rolling(window=14).mean()
+
+    df["donchian_high_20"] = df["high"].rolling(window=20).max().shift(1)
+    df["donchian_low_20"] = df["low"].rolling(window=20).min().shift(1)
+
+    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["ema200"] = df["close"].ewm(span=200, adjust=False).mean()
+
+    df.dropna(subset=["atr14", "donchian_high_20", "donchian_low_20", "ema200"], inplace=True)
+    return df
+
+def run_2018_gold_crypto_backtest():
+    cfg_path = PROJECT_DIR / "config" / "convexity_config.json"
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    # 2018 yılında aktif olan varlıklar (SOLUSD 2020'de kuruldu)
+    symbols = ["XAUUSD", "BTCUSD", "ETHUSD"]
+    initial_capital = config.get("backtest", {}).get("initial_capital", 10000.0)
+
+    cache_dir = PROJECT_DIR / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    detector = TrendDetector(config)
+    simulator = ConvexitySimulator(config)
+
+    all_2018_trades: List[ConvexityTrade] = []
+    symbol_reports: List[ConvexityReport] = []
+
+    for symbol in symbols:
+        df = load_2018_data_with_warmup(symbol, cache_dir)
+        if df.empty or len(df) < 50:
+            print(f"⚠️ [{symbol}]: Yetersiz veri.")
+            continue
+
+        signals = []
+        for i in range(1, len(df)):
+            sig = detector.check_breakout(df, i, symbol)
+            if sig:
+                signals.append(sig)
+
+        full_trades = simulator.simulate_trades_for_symbol(df, signals, symbol)
+
+        # SADECE 2018 yılında açılan işlemler
+        trades_2018 = [t for t in full_trades if "2018-01-01" <= t.entry_date <= "2018-12-31"]
+        all_2018_trades.extend(trades_2018)
+
+        rep = PerformanceReporter.calculate(trades_2018, name=symbol, initial_capital=initial_capital)
+        symbol_reports.append(rep)
+
+    if not all_2018_trades:
+        print("❌ 2018 yılında işlem oluşmadı.")
+        return
+
+    all_2018_trades.sort(key=lambda t: t.entry_date)
+    portfolio_report = PerformanceReporter.calculate(
+        all_2018_trades,
+        name="2018 Gold & Crypto Portfolio",
+        initial_capital=initial_capital
+    )
+
+    sep = "═" * 105
+    mid = "─" * 105
+
+    print("\n" + sep)
+    print(" 🌟 BEGONYA CONVEXITY │ 2018 YILI ALTIN & KRİPTO ÖZEL BACKTEST KARNESİ 🌟 ")
+    print("   • Evren              : Altın (XAUUSD), Bitcoin (BTCUSD), Ethereum (ETHUSD)")
+    print("   • Not                : Solana (SOL) 2018'de henüz piyasaya sürülmediği için hariçtir (2020 çıkışlı)")
+    print("   • Dönem              : 01 Ocak 2018 - 31 Aralık 2018 (Tarihin İlk Büyük Kripto Çöküşü / ICO Kışı)")
+    print(f"   • Risk Yönetimi      : Sabit %0.50 Risk / İşlem ($10,000 Hesapta $50.00)")
+    print("   • Strateji Mekaniği  : 20G Donchian + 200 EMA + %50 Kâr Kilit @ 2.0R + 2.5x ATR Trailing")
+    print(sep + "\n")
+
+    # 1. Büyük Sonuç
+    print("📊 [BÖLÜM 1] 2018 PORTFÖY GENELİ BÜYÜK SONUÇ")
+    print(mid)
+    w = 38
+    print(f"{'Toplam Açılan İşlem (N)':<{w}} : {portfolio_report.total_trades} İşlem")
+    print(f"{'Kazanan / Kaybeden':<{w}} : {portfolio_report.wins} Win / {portfolio_report.losses} Loss")
+    print(f"{'Kazanma Oranı (Win Rate)':<{w}} : %{portfolio_report.win_rate_pct:.1f}")
+    print(f"{'Ortalama Kazanç (Avg Win)':<{w}} : +{portfolio_report.avg_win_r:.2f} R (+${portfolio_report.avg_win_r * 50:.2f})")
+    print(f"{'Ortalama Kayıp (Avg Loss)':<{w}} : -{portfolio_report.avg_loss_r:.2f} R (-${portfolio_report.avg_loss_r * 50:.2f})")
+    print(f"{'Asimetrik Oran (Payoff Ratio)':<{w}} : {portfolio_report.payoff_ratio:.2f}x")
+    print(f"{'İşlem Başı Matematiksel Beklenti':<{w}} : {portfolio_report.expectancy_r:>+5.2f} R / işlem (+${portfolio_report.expectancy_r * 50:.2f})")
+    print(f"{'Kâr Faktörü (Profit Factor)':<{w}} : {portfolio_report.profit_factor:.2f}")
+    print(mid)
+    print(f"{'Toplam Net Getiri (Net R)':<{w}} : {portfolio_report.total_r:>+6.2f} R")
+    print(f"{'Sermaye Büyümesi (%0.5 Risk ile)':<{w}} : %{portfolio_report.return_on_capital_pct:>+6.2f} (${portfolio_report.total_pnl_dollars:>+8.2f} Net Kâr)")
+    print(f"{'Maksimum Sermaye Çekilmesi (Max DD)':<{w}} : -{portfolio_report.max_drawdown_r:.2f} R (%{portfolio_report.max_drawdown_pct:.2f})")
+    print(f"{'En Uzun Art Arda Kayıp Serisi':<{w}} : {portfolio_report.max_consecutive_losses} İşlem")
+    print(f"{'Ortalama Pozisyon Taşıma Süresi':<{w}} : {portfolio_report.avg_holding_days:.1f} Gün")
+    print(sep + "\n")
+
+    # 2. Varlık Bazlı Tablo
+    print("📋 [BÖLÜM 2] ALTIN VE KRİPTOLARIN TEK TEK 2018 KARNESİ")
+    print(sep)
+    print(f"{'Varlık':<10} │ {'İşlem':<6} │ {'Win %':<8} │ {'Ort.Kâr/Zarar':<15} │ {'Payoff':<7} │ {'Net Getiri (R)':<16} │ {'Net PnL ($)':<12} │ {'Kâr Fakt':<9} │ {'Max DD'}")
+    print(mid)
+    symbol_reports.sort(key=lambda r: r.total_r, reverse=True)
+    for r in symbol_reports:
+        win_loss_str = f"+{r.avg_win_r:.1f}R / -{r.avg_loss_r:.1f}R"
+        pnl_usd_str = f"${r.total_pnl_dollars:>+8.2f}"
+        print(f"{r.name:<10} │ {r.total_trades:>4}   │ %{r.win_rate_pct:>5.1f}  │ {win_loss_str:<15} │ {r.payoff_ratio:>4.1f}x │ {r.total_r:>+7.2f} R          │ {pnl_usd_str:<12} │ {r.profit_factor:>6.2f}   │ -{r.max_drawdown_r:.1f} R")
+    print(sep + "\n")
+
+    # 3. Aylık Performans
+    print("📅 [BÖLÜM 3] 2018 AYLIK GETİRİ DAĞILIMI (OCAK - ARALIK 2018)")
+    print(mid)
+    print(f"{'Ay':<14} │ {'Kapanan İşlem':<15} │ {'Win %':<10} │ {'Net Getiri (R)':<16} │ {'Net Getiri ($)':<16} │ {'Kâr Faktörü'}")
+    print(mid)
+    for m in range(1, 13):
+        m_str = f"2018-{m:02d}"
+        m_label = f"{m_str}"
+        m_trades = [t for t in all_2018_trades if t.exit_date.startswith(m_str)]
+        if m_trades:
+            m_rep = PerformanceReporter.calculate(m_trades, name=m_label, initial_capital=initial_capital)
+            print(f"{m_label:<14} │ {m_rep.total_trades:>8}        │ %{m_rep.win_rate_pct:>5.1f}    │ {m_rep.total_r:>+7.2f} R          │ ${m_rep.total_pnl_dollars:>+9.2f}        │ {m_rep.profit_factor:>6.2f}")
+        else:
+            print(f"{m_label:<14} │ {'0':>8}        │ %  0.0    │   +0.00 R          │ $    +0.00        │   0.00")
+    print(sep + "\n")
+
+    # 4. En Büyük Koşucular (Top Runners)
+    print("🚀 [BÖLÜM 4] 2018 YILININ EN BÜYÜK ASİMETRİK İŞLEMLERİ (TOP RUNNERS)")
+    print(mid)
+    print(f"{'Giriş':<11} {'Çıkış':<11} {'Varlık':<8} {'Yön':<6} {'Giriş':<11} {'Çıkış':<11} {'Süre(G)':<8} {'Zirve R':<8} {'Net R':<9} {'Net PnL ($)'}")
+    print(mid)
+    top_winners = sorted(all_2018_trades, key=lambda t: t.pnl_r, reverse=True)[:8]
+    for w in top_winners:
+        print(f"{w.entry_date:<11} {w.exit_date:<11} {w.symbol:<8} {w.direction:<6} {w.entry_price:<11.2f} {w.exit_price:<11.2f} {w.holding_days:<8} {w.peak_r:>+5.1f}R  {w.pnl_r:>+6.2f}R  +${w.pnl_dollars:.2f}")
+    print(sep + "\n")
+
+    # 5. Kümülatif Getiri Eğrisi
+    print("📈 [BÖLÜM 5] 2018 ALTIN & KRİPTO BİLEŞİK GETİRİ EĞRİSİ (EQUITY CURVE)")
+    print(PerformanceReporter.render_ascii_curve(all_2018_trades, height=10, width=60))
+    print(sep + "\n")
+
+    # 6. Benchmark Kaydı
+    collector = BenchmarkCollector()
+    saved_path = collector.log_backtest_benchmark(
+        portfolio_report=portfolio_report,
+        config={**config, "symbols": symbols},
+        symbol_reports=symbol_reports,
+        notes="2018 Altın & Kripto Özel Yıllık Backtesti (XAUUSD, BTC, ETH - ICO Çöküş Yılı)"
+    )
+    print(f"📁 2018 Benchmark kaydı arşivlendi: {saved_path}\n")
+
+if __name__ == "__main__":
+    run_2018_gold_crypto_backtest()

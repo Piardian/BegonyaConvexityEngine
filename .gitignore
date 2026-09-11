@@ -1,0 +1,43 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.class
+
+# Environment and secrets
+.env
+.env.local
+*.secret
+*.pem
+*.key
+
+# Local Data Cache (historical daily candles downloaded via yfinance)
+cache/*.csv
+!cache/.gitkeep
+
+# Runtime logs and telemetry audit logs
+logs/*.jsonl
+logs/*.log
+!logs/.gitkeep
+
+# Runtime tickets and state
+state/*.json
+!state/.gitkeep
+
+# Operating System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Virtual Environments
+env/
+venv/
+.venv/
+ENV/
