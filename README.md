@@ -1,4 +1,4 @@
-﻿# 🌺 BEGONYA CONVEXITY ENGINE
+# 🌺 BEGONYA CONVEXITY ENGINE
 ### Asymmetric Risk D1/W1 Convexity Engine & Automated MT5 Trend-Following Architecture
 
 [![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -223,10 +223,10 @@ begonya_convexity_engine/
 ## 🛠️ 8. Kurulum ve Başlangıç
 
 ### 1. Depoyu Klonlayın
-`ash
-git clone https://github.com/Piardian/BEGONYA-CONVEXITY-ENGINE.git
-cd BEGONYA-CONVEXITY-ENGINE
-`
+```bash
+git clone https://github.com/Piardian/BegonyaConvexityEngine.git
+cd BegonyaConvexityEngine
+```
 
 ### 2. Sanal Ortam Oluşturun ve Aktif Edin
 `powershell
