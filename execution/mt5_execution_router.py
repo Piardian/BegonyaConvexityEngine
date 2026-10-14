@@ -31,8 +31,27 @@ class MT5ExecutionRouter:
         self.trailing_atr_mult = config.get("mechanics", {}).get("trailing_atr_multiplier", 2.5)
         self.mapper = SymbolMapper(config.get("execution", {}).get("symbol_overrides", {}))
         self.telemetry = telemetry or TelemetryLogger()
+        self.shadow_mode = config.get("execution", {}).get("shadow_mode", True)
+        self.allow_real_orders = config.get("execution", {}).get("allow_real_orders", False)
 
         self._init_mt5()
+
+    def is_real_execution_blocked(self) -> Tuple[bool, str]:
+        """
+        Gerçek hesaplarda veya gölge modunda mt5.order_send çağrısını KESİNLİKLE engeller.
+        The 5%ers hesabı veya herhangi bir Real sunucu bağlıysa gerçek emir gönderimi sert kilitlidir.
+        """
+        if self.shadow_mode or not self.allow_real_orders:
+            return True, "Gölge Modu (Shadow Mode) Aktif - Gerçek emir iletimi kilitli"
+
+        if mt5.initialize():
+            acc = mt5.account_info()
+            if acc:
+                server_str = str(acc.server).lower()
+                company_str = str(acc.company).lower()
+                if acc.login == 26735345 or "real" in server_str or "fivepercent" in server_str or "fivepercent" in company_str:
+                    return True, f"Korumalı Gerçek Hesap ({acc.login} @ {acc.server}) - Gerçek emir iletimi sert kilitli!"
+        return False, ""
 
     def _init_mt5(self) -> bool:
         if not mt5.initialize():
@@ -177,8 +196,34 @@ class MT5ExecutionRouter:
             filling_mode = mt5.ORDER_FILLING_IOC
         elif info and (info.filling_mode & 1):
             filling_mode = mt5.ORDER_FILLING_FOK
-        else:
-            filling_mode = mt5.ORDER_FILLING_RETURN
+        # --- GÖLGE İŞLEM VE GERÇEK HESAP HARD-LOCK KORUMASI ---
+        blocked, block_reason = self.is_real_execution_blocked()
+        if blocked:
+            logger.info(f"👻 [GÖLGE İŞLEM / SHADOW DEVREDE]: {block_reason}. MT5 gerçek emir iletimi kilitli, sanal bilet oluşturuluyor.")
+            virtual_base = int(time.time() * 1000) % 900000000 + 100000000
+            ticket_a = virtual_base
+            ticket_b = virtual_base + 1
+            event = {
+                "status": "SHADOW_FILLED",
+                "is_shadow": True,
+                "real_order": False,
+                "symbol": broker_symbol,
+                "action": direction,
+                "ticket_a": ticket_a,
+                "lot_a": lot_a,
+                "tp_a": order_tp_a,
+                "ticket_b": ticket_b,
+                "lot_b": lot_b,
+                "sl": order_sl,
+                "requested_price": req_price,
+                "avg_fill_price": req_price,
+                "slippage_pts": 0.0,
+                "slippage_r": 0.0,
+                "spread": info.spread if info else 0,
+                "reason": f"GÖLGE İŞLEM ({block_reason})"
+            }
+            self.telemetry.log_execution(event)
+            return event
 
         # --- BİLET A GÖNDER (+2.0R Limit TP) ---
         req_a = {
@@ -286,10 +331,12 @@ class MT5ExecutionRouter:
             current_sl = pos.sl
             entry_price = pos.price_open
             pos_type = pos.type # 0: BUY, 1: SELL
+            is_active = d1_info.get("is_active", True)
+            active_trail_mult = self.trailing_atr_mult if is_active else 1.0
 
             if pos_type == mt5.POSITION_TYPE_BUY:
                 recent_high = d1_info.get("recent_high", d1_info.get("close", entry_price))
-                new_sl = round(recent_high - (self.trailing_atr_mult * current_atr), 5)
+                new_sl = round(recent_high - (active_trail_mult * current_atr), 5)
 
                 # Stop yalnızca yukarı yönlü revize edilir (Kârı kilitlemek için)
                 if new_sl > current_sl + (0.1 * current_atr):
@@ -316,7 +363,7 @@ class MT5ExecutionRouter:
 
             elif pos_type == mt5.POSITION_TYPE_SELL:
                 recent_low = d1_info.get("recent_low", d1_info.get("close", entry_price))
-                new_sl = round(recent_low + (self.trailing_atr_mult * current_atr), 5)
+                new_sl = round(recent_low + (active_trail_mult * current_atr), 5)
 
                 # Stop yalnızca aşağı yönlü revize edilir
                 if new_sl < current_sl - (0.1 * current_atr) or current_sl == 0:

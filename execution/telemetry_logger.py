@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import logging
 import urllib.request
@@ -6,6 +7,14 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+# Windows UTF-8 desteği
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 logger = logging.getLogger("TelemetryLogger")
 
@@ -108,7 +117,14 @@ class TelemetryLogger:
         slip_pts = d.get("slippage_pts", 0.0)
         slip_r = d.get("slippage_r", 0.0)
 
-        print(f"\n📡 [{self.header_title} | {status}] {action} {sym} (A:{lot_a}L, B:{lot_b}L) | İstenen: {req_p:.4f} ➔ Gerçekleşen: {fill_p:.4f} | Slippage: {slip_pts:+.2f} pts ({slip_r:+.3f}R)")
+        msg = f"\n📡 [{self.header_title} | {status}] {action} {sym} (A:{lot_a}L, B:{lot_b}L) | İstenen: {req_p:.4f} ➔ Gerçekleşen: {fill_p:.4f} | Slippage: {slip_pts:+.2f} pts ({slip_r:+.3f}R)"
+        try:
+            print(msg)
+        except Exception:
+            try:
+                print(msg.encode("ascii", "replace").decode("ascii"))
+            except Exception:
+                pass
 
     def _send_telegram(self, d: Dict[str, Any]):
         try:
@@ -116,19 +132,31 @@ class TelemetryLogger:
             action = d.get("action", "")
             sym = d.get("symbol", "")
 
-            # SADECE ve SADECE Gerçekten İnfaz Edilen İşlemlerde Telegram Mesajı Gönder
-            if status == "FILLED":
-                icon = "🟢" if "BUY" in action.upper() or "LONG" in action.upper() else "🔴"
+            is_shadow = d.get("is_shadow", False) or status == "SHADOW_FILLED"
+            shadow_tag = " │ 👻 GÖLGE İŞLEM" if is_shadow else ""
+
+            # SADECE ve SADECE Gerçekten veya Gölgede İnfaz Edilen İşlemlerde Telegram Mesajı Gönder
+            if status in ("FILLED", "SHADOW_FILLED"):
+                if is_shadow:
+                    icon = "👻"
+                    title_act = f"YENİ GÖLGE İŞLEM (SHADOW): {action} {sym}"
+                    footer = "🛡️ <i>The 5%ers gerçek hesabı koruma altında (Sanal takip devrede).</i>\n"
+                else:
+                    icon = "🟢" if "BUY" in action.upper() or "LONG" in action.upper() else "🔴"
+                    title_act = f"YENİ İŞLEM AÇILDI: {action} {sym}"
+                    footer = ""
+
                 msg = (
-                    f"🤖 <b>{self.header_title}</b>\n"
+                    f"🤖 <b>{self.header_title}{shadow_tag}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"{icon} <b>YENİ İŞLEM AÇILDI: {action} {sym}</b>\n\n"
+                    f"{icon} <b>{title_act}</b>\n\n"
                     f"🎫 <b>Bilet A (Hedefli):</b> {d.get('lot_a')} Lot ➔ TP: {d.get('tp_a'):.5f} (+2.0R)\n"
                     f"🎫 <b>Bilet B (Koşucu):</b> {d.get('lot_b')} Lot ➔ TP: Sonsuz (2.5x ATR Trailing)\n"
                     f"🛑 <b>Ortak Stop Loss:</b> {d.get('sl'):.5f}\n"
-                    f"🎯 <b>Ortalama Giriş:</b> {d.get('avg_fill_price', 0):.5f}\n"
+                    f"🎯 <b>Giriş Fiyatı:</b> {d.get('avg_fill_price', 0):.5f}\n"
                     f"⚡ <b>Slippage:</b> {d.get('slippage_pts', 0):+.2f} pts ({d.get('slippage_r', 0):+.3f}R)\n"
                     f"📊 <b>Anlık Spread:</b> {d.get('spread', 0)} pts\n"
+                    f"{footer}"
                     f"⏰ <b>Zaman:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 )
             elif status in ("PARTIAL_OR_FAILED", "REJECTED_SPREAD", "REJECTED_PRICE_MISMATCH", "ERROR", "FAILED"):
@@ -139,7 +167,7 @@ class TelemetryLogger:
             # B) Trailing Stop Güncelleme Bildirimi
             elif action == "TRAILING_UPDATE":
                 msg = (
-                    f"🤖 <b>{self.header_title}</b>\n"
+                    f"🤖 <b>{self.header_title}{shadow_tag}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🛡️ <b>TRAILING STOP GÜNCELLENDİ: {sym}</b>\n\n"
                     f"🎫 <b>Bilet No:</b> #{d.get('ticket')}\n"
@@ -154,21 +182,24 @@ class TelemetryLogger:
                 pnl_r = d.get("pnl_r", 0.0)
                 pnl_usd = d.get("pnl_usd", 0.0)
                 res_icon = "💰" if pnl_r > 0 else "🛑"
+                head_str = "GÖLGE İŞLEM KAPANDI" if is_shadow else "İŞLEM KAPANDI"
+                footer = "🛡️ <i>Sanal kâr/zarar kaydedildi (Gerçek bakiye etkilenmedi).</i>\n" if is_shadow else ""
                 msg = (
-                    f"🤖 <b>{self.header_title}</b>\n"
+                    f"🤖 <b>{self.header_title}{shadow_tag}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"{res_icon} <b>İŞLEM KAPANDI: {sym}</b>\n\n"
+                    f"{res_icon} <b>{head_str}: {sym}</b>\n\n"
                     f"🎫 <b>Bilet:</b> #{d.get('ticket', 'N/A')}\n"
                     f"📌 <b>Neden:</b> {d.get('reason', 'Kapanış')}\n"
                     f"💵 <b>Net PnL (R):</b> {pnl_r:+.2f} R\n"
                     f"💲 <b>Net PnL ($):</b> ${pnl_usd:+.2f}\n"
+                    f"{footer}"
                     f"⏰ <b>Zaman:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 )
 
             # D) Diğer Durumlar (Red, Hata vb.)
             else:
                 msg = (
-                    f"🤖 <b>{self.header_title}</b>\n"
+                    f"🤖 <b>{self.header_title}{shadow_tag}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"⚠️ <b>DURUM: {status}</b>\n"
                     f"<b>Varlık:</b> {sym}\n"

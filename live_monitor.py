@@ -26,18 +26,13 @@ from execution.telemetry_logger import TelemetryLogger
 logging.basicConfig(level=logging.WARNING)
 
 def format_begonya_card(item: dict, capital: float = 10000.0, risk_pct: float = 2.0) -> str:
-    """Begonya formatında kurumsal sinyal/takip kartı oluşturur."""
+    """Saf Matematiksel Bot formatında sinyal/takip kartı oluşturur."""
     sym = item["symbol"]
     direction = item["direction"]
     status = item["status"]
     regime = item["regime"]
-    macro_regime = item.get("macro_regime", "Bilinmiyor")
-    macro_bias = item.get("macro_bias", "N/A")
-    macro_status = item.get("macro_status_message", "")
-    macro_mult = item.get("macro_risk_multiplier", 1.0)
     curr = item["current_price"]
-    base_risk_dollars = capital * (risk_pct / 100.0)
-    actual_risk_dollars = round(base_risk_dollars * macro_mult, 2)
+    actual_risk_dollars = round(capital * (risk_pct / 100.0), 2)
 
     sep = "═" * 70
     thin = "─" * 70
@@ -46,21 +41,13 @@ def format_begonya_card(item: dict, capital: float = 10000.0, risk_pct: float = 
         entry = item["entry_price"]
         sl = item["stop_loss"]
         tp2 = item["partial_tp_2r"]
-        is_allowed = item.get("macro_allowed", True)
-
-        action_text = (
-            f"✅ Makro kapı onayladı ({macro_mult:.2f}x). İki bilet emrini ilet."
-            if is_allowed
-            else f"🛑 Begonya Makro Kalkanı Veto Etti! İşlem açma, nakitte kal."
-        )
 
         lines = [
             sep,
-            f"  🌺 BEGONYA CONVEXITY │ CANLI SİNYAL: {sym} ({direction})",
+            f"  🤖 MATEMATİKSEL BOT │ CANLI SİNYAL: {sym} ({direction})",
             sep,
             f"DURUM           : {status}",
-            f"MAKRO REJİM     : {macro_regime}",
-            f"MAKRO KAPI      : {macro_bias} ({macro_status})",
+            f"MODEL           : Saf Matematiksel Rotasyon (Bağımsız)",
             f"TEKNİK TREND    : {regime}",
             thin,
             f"Giriş Seviyesi  : {entry:.4f}",
@@ -68,8 +55,8 @@ def format_begonya_card(item: dict, capital: float = 10000.0, risk_pct: float = 
             f"%50 Kâr Al (2R) : {tp2:.4f} (+1.0 R Kasaya Kilitlenecek)",
             f"Kalan %50 Takip : 2.0x ATR Trailing Stop (Kârı Koştur)",
             thin,
-            f"Dinamik Risk    : ${actual_risk_dollars:.2f} (%{risk_pct:.1f} Temel Risk @ 1R)",
-            f"Aksiyon         : {action_text}",
+            f"Sabit Risk (1R) : ${actual_risk_dollars:.2f} (%{risk_pct:.1f} Bakiye Riski)",
+            f"Aksiyon         : ✅ Matematiksel Kırılım Onaylandı. İki bilet emrini ilet.",
             sep
         ]
     else:
@@ -77,18 +64,39 @@ def format_begonya_card(item: dict, capital: float = 10000.0, risk_pct: float = 
         radar_dir = item.get("radar_direction", "RADAR")
         lines = [
             sep,
-            f"  👀 BEGONYA CONVEXITY │ RADAR / TAKİP LİSTESİ: {sym} ({radar_dir})",
+            f"  👀 MATEMATİKSEL BOT │ RADAR / TAKİP LİSTESİ: {sym} ({radar_dir})",
             sep,
             f"DURUM           : {status}",
-            f"MAKRO REJİM     : {macro_regime}",
-            f"MAKRO KAPI      : {macro_bias} ({macro_status})",
             f"TEKNİK TREND    : {regime}",
             f"Anlık Fiyat     : {curr:.4f}",
             f"Kritik Kırılım  : {entry:.4f}",
-            f"Aksiyon         : Kırılım henüz tetiklenmedi. Günlük kapanışı ve makro kapıyı izle.",
+            f"Aksiyon         : Kırılım henüz tetiklenmedi. Günlük kapanışı izle.",
             sep
         ]
     return "\n".join(lines)
+
+def get_passive_reasons(symbols: list, active_symbols: set, market_data: dict, rot_engine: RotationalSelectionEngine) -> list:
+    """Aktif listede olmayan varlıkların matematiksel elenme/kırmızı kart nedenlerini döndürür."""
+    reasons = []
+    for sym in sorted(symbols):
+        if sym in active_symbols:
+            continue
+        df = market_data.get(sym)
+        if df is None or df.empty:
+            reasons.append((sym, "Veri yetersiz"))
+            continue
+        row = df.iloc[-1]
+        close = float(row["close"])
+        ema200 = float(row.get("ema200", close))
+        atr = float(row.get("atr14", 0.0))
+        atr_pct = (atr / close) * 100.0 if close > 0 else 0.0
+        if close <= ema200:
+            reasons.append((sym, f"200 EMA Altı ({close:.4f} | EMA: {ema200:.4f})"))
+        elif atr_pct < rot_engine.min_atr_pct:
+            reasons.append((sym, f"Volatilite Sıkışması (ATR %{atr_pct:.2f} / Min %{rot_engine.min_atr_pct})"))
+        else:
+            reasons.append((sym, "30 Günlük Karantina / Sıralama Dışı"))
+    return reasons
 
 def run_live_cycle():
     cfg_path = PROJECT_DIR / "config" / "convexity_config.json"
@@ -106,8 +114,9 @@ def run_live_cycle():
     risk_dollars_1r = initial_capital * (risk_pct / 100.0)
 
     print("\n" + "═" * 80)
-    print(" 🌺 BEGONYA CONVEXITY ENGINE │ CANLI ROTASYON & PİYASA RADARI 🌺 ")
-    print(f"   • Risk Modeli       : %{risk_pct:.1f} ($ {risk_dollars_1r:,.2f} / 1R @ $10,000 Hesap)")
+    print(" 🤖 MATEMATİKSEL BOT (CONVEXITY ENGINE) │ BAĞIMSIZ CANLI PİYASA RADARI 🤖 ")
+    print(f"   • Çalışma Modu      : %100 Bağımsız & Saf Matematiksel (Makro Veto Yok)")
+    print(f"   • Risk Modeli       : %{risk_pct:.1f} ($ {risk_dollars_1r:,.2f} / 1R @ $10,000 Baz)")
     print("   • Evren             : 16 Küresel Varlık (Genişletilmiş 'Olabildiğince Çok' Modeli)")
     print("   • Çıkarma Protokolü : 200 EMA Kırılımı + Volatilite Sıkışması + Karantina")
     print("═" * 80 + "\n")
@@ -128,15 +137,15 @@ def run_live_cycle():
         open_positions=set()
     )
 
-    evicted_symbols = [a for a in audit_events if a.action == "EVICTED"]
+    passive_reasons = get_passive_reasons(symbols, active_symbols, market_data, rot_engine)
 
     print(f"🟢 ŞU AN AKTİF LİSTEDE OLANLAR ({len(active_symbols)} Varlık):")
     print("   " + ", ".join(sorted(list(active_symbols))) if active_symbols else "   (Aktif varlık yok)")
 
-    if evicted_symbols:
-        print(f"\n🔴 BUGÜN KIRMIZI KARTLA ÇIKARILANLAR ({len(evicted_symbols)} Varlık):")
-        for ev in evicted_symbols:
-            print(f"   • {ev.symbol:<8}: {ev.reason}")
+    if passive_reasons:
+        print(f"\n🔴 KIRMIZI KARTLI / PASİF LİSTEDEKİLER ({len(passive_reasons)} Varlık):")
+        for sym, r_text in passive_reasons:
+            print(f"   • {sym:<8}: {r_text}")
 
     # 3. Kırılım ve Radar Taraması
     signals = scanner.scan_all_symbols()
@@ -165,11 +174,11 @@ def run_live_cycle():
     # 4. TELEGRAM BİLDİRİMİ GÖNDER (@Begonyamatematiksel_bot)
     try:
         active_list_str = ", ".join(sorted(list(active_symbols)))
-        evicted_str = "\n".join([f"• <b>{e.symbol}</b>: {e.reason}" for e in evicted_symbols]) if evicted_symbols else "Yok (Tüm aktifler sağlıklı)"
+        passive_str = "\n".join([f"• <b>{s}</b>: {r}" for s, r in passive_reasons]) if passive_reasons else "Yok"
         
         signal_status_str = ""
         if valid_fresh_breaks:
-            signal_status_str = f"🚨 <b>BUGÜN YENİ İŞLEM:</b> {len(valid_fresh_breaks)} adet kırılım var!\n"
+            signal_status_str = f"🚨 <b>BUGÜN YENİ İŞLEM ({len(valid_fresh_breaks)}):</b>\n"
             for fb in valid_fresh_breaks:
                 signal_status_str += f"➔ <b>{fb['direction']} {fb['symbol']}</b> @ {fb['entry_price']:.4f} (SL: {fb['stop_loss']:.4f})\n"
         else:
@@ -180,21 +189,21 @@ def run_live_cycle():
             radar_str = "\n👀 <b>Radardakiler:</b> " + ", ".join([f"{r['symbol']} ({r.get('radar_direction','RADAR')})" for r in radars])
 
         tg_msg = (
-            f"🌺 <b>BEGONYA CONVEXITY ENGINE │ CANLI DURUM RAPORU</b> 🌺\n"
+            f"🤖 <b>MATEMATİKSEL BOT │ BAĞIMSIZ CANLI DURUM RAPORU</b> 🤖\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ <b>Sistem Durumu:</b> CANLI AKTİF (LIVE)\n"
-            f"🛡️ <b>Risk Modeli:</b> %{risk_pct:.1f} (${risk_dollars_1r:,.2f} / 1R)\n"
+            f"⚡ <b>Mod:</b> %100 BAĞIMSIZ & SAF MATEMATİKSEL\n"
+            f"🛡️ <b>Risk Modeli:</b> %{risk_pct:.1f} (Sabit 1R)\n"
             f"⏰ <b>Zaman:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🟢 <b>Aktif İşlem Listesi ({len(active_symbols)}):</b>\n<code>{active_list_str}</code>\n\n"
-            f"🔴 <b>Kırmızı Kart / Kovulanlar:</b>\n{evicted_str}\n\n"
+            f"🔴 <b>Kırmızı Kart / Pasif ({len(passive_reasons)}):</b>\n{passive_str}\n\n"
             f"{signal_status_str}"
             f"{radar_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 <i>Begonya Matematiksel Bot devrede. Otomatik infaz ve koruma aktif.</i>"
+            f"✅ <i>Bağımsız Matematiksel Bot 7/24 nöbette.</i>"
         )
         telemetry.send_custom_message(tg_msg)
-        print("\n📲 Telegram (@Begonyamatematiksel_bot) canlı durum bildirimi başarıyla iletildi!")
+        print("\n📲 Telegram (@Begonyamatematiksel_bot) bağımsız durum bildirimi başarıyla iletildi!")
     except Exception as e:
         print(f"\n⚠️ Telegram bildirimi gönderilemedi: {e}")
 

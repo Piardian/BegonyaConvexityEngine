@@ -1,4 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *.class
@@ -15,9 +15,10 @@ cache/*.csv
 !cache/.gitkeep
 
 # Runtime logs and telemetry audit logs
-logs/*.jsonl
 logs/*.log
 !logs/.gitkeep
+!logs/*.jsonl
+!logs/*.json
 
 # Runtime tickets and state
 state/*.json

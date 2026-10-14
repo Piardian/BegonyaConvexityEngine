@@ -54,6 +54,8 @@
     }
   },
   "execution": {
+    "shadow_mode": true,
+    "allow_real_orders": false,
     "risk_per_trade_pct": 2.0,
     "max_spread_multiplier": 2.0,
     "magic_scaler": 260901,
