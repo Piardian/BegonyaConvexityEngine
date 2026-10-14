@@ -4,6 +4,7 @@
   "backtest": {
     "initial_capital": 10000.0,
     "risk_per_trade_pct": 2.0,
+    "commission_spread_r_per_trade": 0.05,
     "start_year": 2021,
     "end_year": 2026,
     "symbols": [
