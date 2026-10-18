@@ -40,18 +40,37 @@ class MT5ExecutionRouter:
         """
         Gerçek hesaplarda veya gölge modunda mt5.order_send çağrısını KESİNLİKLE engeller.
         The 5%ers hesabı veya herhangi bir Real sunucu bağlıysa gerçek emir gönderimi sert kilitlidir.
+        Bağlantı veya hesap doğrulanamazsa Fail-Closed kilit uygular.
         """
         if self.shadow_mode or not self.allow_real_orders:
             return True, "Gölge Modu (Shadow Mode) Aktif - Gerçek emir iletimi kilitli"
 
-        if mt5.initialize():
-            acc = mt5.account_info()
-            if acc:
-                server_str = str(acc.server).lower()
-                company_str = str(acc.company).lower()
-                if acc.login == 26735345 or "real" in server_str or "fivepercent" in server_str or "fivepercent" in company_str:
-                    return True, f"Korumalı Gerçek Hesap ({acc.login} @ {acc.server}) - Gerçek emir iletimi sert kilitli!"
+        if not mt5.initialize():
+            return True, "FAIL-CLOSED: MT5 terminali başlatılamadı veya bağlantı yok - Gerçek emir iletimi kilitli!"
+
+        acc = mt5.account_info()
+        if not acc:
+            return True, "FAIL-CLOSED: MT5 hesap bilgisi alınamadı / doğrulanamadı - Gerçek emir iletimi kilitli!"
+
+        server_str = str(acc.server).lower()
+        company_str = str(acc.company).lower()
+        if acc.login == 26735345 or "real" in server_str or "fivepercent" in server_str or "fivepercent" in company_str:
+            return True, f"Korumalı Gerçek Hesap ({acc.login} @ {acc.server}) - Gerçek emir iletimi sert kilitli!"
+
         return False, ""
+
+    def safe_order_send(self, request: dict) -> Tuple[bool, Optional[Any], str]:
+        """
+        Tüm mt5.order_send çağrıları için merkezi ortak güvenlik kapısı.
+        Kilit devredeyse veya bağlantı kopuksa ASLA mt5.order_send çağırmaz, Fail-Closed davranır.
+        """
+        blocked, block_reason = self.is_real_execution_blocked()
+        if blocked:
+            logger.warning(f"🛡️ [GÜVENLİK KİLİDİ AKTİF]: order_send KESİNLİKLE engellendi - {block_reason}")
+            return False, None, block_reason
+
+        res = mt5.order_send(request)
+        return True, res, "OK"
 
     def _init_mt5(self) -> bool:
         if not mt5.initialize():
@@ -95,27 +114,52 @@ class MT5ExecutionRouter:
         else:
             normalized_lots = round(raw_lots, 2)
 
-        return max(info.volume_min, min(info.volume_max, normalized_lots))
+        # Broker minimum lotu planlanan riski aşıyorsa YUKARI YUVARLAMA YAPMA!
+        # normalized_lots < info.volume_min ise risk bütçesi aşılacağı için işlem reddedilir.
+        if normalized_lots < info.volume_min:
+            logger.warning(
+                f"⚠️ [{broker_symbol}] Broker minimum lotu ({info.volume_min}) "
+                f"hesaplanan risk lotunu ({normalized_lots:.4f}) aşıyor. "
+                f"Risk bütçesini (${target_risk_usd:.2f}) korumak için işlem reddedildi."
+            )
+            return None
+
+        return min(info.volume_max, normalized_lots)
 
     def split_lot_sizes(self, broker_symbol: str, total_lot: float) -> Tuple[float, float]:
         """
         Toplam lotu Bilet A (%50 TP) ve Bilet B (%50 Runner) için böler.
         Minimum hacim sınırına (volume_min) ve step kuralına tam uyar.
+        Toplam lot iki biletin asgari hacmini karşılamıyorsa lotu yukarı yuvarlamaz, (0.0, 0.0) döner.
         """
         info = mt5.symbol_info(broker_symbol)
         min_vol = info.volume_min if info else 0.01
         step = info.volume_step if info else 0.01
 
+        if total_lot < (2.0 * min_vol):
+            logger.warning(
+                f"⚠️ [{broker_symbol}] Toplam lot ({total_lot:.4f}) iki biletin asgari hacmini "
+                f"(2 x {min_vol:.2f} = {2.0 * min_vol:.2f}) karşılamıyor. Lot şişmesini önlemek için bölünemez."
+            )
+            return 0.0, 0.0
+
         half = total_lot / 2.0
         if step > 0:
             lot_a = math.floor(half / step) * step
-            lot_b = total_lot - lot_a
+            lot_b = math.floor((total_lot - lot_a) / step) * step
             decimals = int(round(-math.log10(step))) if step < 1 else 0
-            lot_a = round(max(min_vol, lot_a), decimals)
-            lot_b = round(max(min_vol, lot_b), decimals)
+            lot_a = round(lot_a, decimals)
+            lot_b = round(lot_b, decimals)
         else:
-            lot_a = max(min_vol, round(half, 2))
-            lot_b = max(min_vol, round(total_lot - lot_a, 2))
+            lot_a = round(half, 2)
+            lot_b = round(total_lot - lot_a, 2)
+
+        # Asla toplam lotu aşamaz (kesin risk koruması)
+        if round(lot_a + lot_b, 4) > round(total_lot, 4):
+            lot_b = round(total_lot - lot_a, 4)
+
+        if lot_a < min_vol or lot_b < min_vol:
+            return 0.0, 0.0
 
         return lot_a, lot_b
 
@@ -160,9 +204,19 @@ class MT5ExecutionRouter:
 
         total_lot = self.calculate_dynamic_lot(broker_symbol, entry_price, sl_price, target_risk_usd)
         if not total_lot or total_lot <= 0:
-            return {"status": "ERROR", "symbol": broker_symbol, "reason": "Geçersiz lot boyutu"}
+            return {
+                "status": "REJECTED_MIN_LOT_RISK",
+                "symbol": broker_symbol,
+                "reason": "Broker minimum lotu planlanan risk bütçesini aşıyor (yukarı yuvarlama engellendi)"
+            }
 
         lot_a, lot_b = self.split_lot_sizes(broker_symbol, total_lot)
+        if lot_a <= 0 or lot_b <= 0:
+            return {
+                "status": "REJECTED_SPLIT_LOT_RISK",
+                "symbol": broker_symbol,
+                "reason": f"Toplam lot ({total_lot}) iki biletin asgari hacmini karşılayamadığı için risk koruması gereği reddedildi"
+            }
 
         tick = mt5.symbol_info_tick(broker_symbol)
         if not tick:
@@ -240,7 +294,7 @@ class MT5ExecutionRouter:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
-        res_a = mt5.order_send(req_a)
+        ok_a, res_a, block_reason_a = self.safe_order_send(req_a)
 
         # --- BİLET B GÖNDER (Trailing Runner - Sonsuz) ---
         req_b = {
@@ -257,16 +311,16 @@ class MT5ExecutionRouter:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_mode,
         }
-        res_b = mt5.order_send(req_b)
+        ok_b, res_b, block_reason_b = self.safe_order_send(req_b)
 
-        if res_a is None or res_a.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.warning(f"⚠️ Bilet A İnfaz Edilemedi [{broker_symbol}]: Retcode={res_a.retcode if res_a else 'None'} ({res_a.comment if res_a else mt5.last_error()})")
-        if res_b is None or res_b.retcode != mt5.TRADE_RETCODE_DONE:
-            logger.warning(f"⚠️ Bilet B İnfaz Edilemedi [{broker_symbol}]: Retcode={res_b.retcode if res_b else 'None'} ({res_b.comment if res_b else mt5.last_error()})")
+        if not ok_a or res_a is None or res_a.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.warning(f"⚠️ Bilet A İnfaz Edilemedi [{broker_symbol}]: Retcode={res_a.retcode if res_a else 'None'} ({res_a.comment if res_a else block_reason_a})")
+        if not ok_b or res_b is None or res_b.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.warning(f"⚠️ Bilet B İnfaz Edilemedi [{broker_symbol}]: Retcode={res_b.retcode if res_b else 'None'} ({res_b.comment if res_b else block_reason_b})")
 
         # Telemetri ve Kayma Hesaplama
-        success_a = res_a is not None and res_a.retcode == mt5.TRADE_RETCODE_DONE
-        success_b = res_b is not None and res_b.retcode == mt5.TRADE_RETCODE_DONE
+        success_a = ok_a and res_a is not None and res_a.retcode == mt5.TRADE_RETCODE_DONE
+        success_b = ok_b and res_b is not None and res_b.retcode == mt5.TRADE_RETCODE_DONE
 
         fill_a = res_a.price if success_a else req_price
         fill_b = res_b.price if success_b else req_price
@@ -310,7 +364,13 @@ class MT5ExecutionRouter:
         """
         Açık olan Bilet B (Runner) pozisyonlarının stoplarını 2.5x ATR kuralıyla günceller.
         mt5.order_send(TRADE_ACTION_SLTP) ile stop seviyesini revize eder.
+        Ortak güvenlik kilidi devredeyse gerçek emir iletimi kilitlidir.
         """
+        blocked, block_reason = self.is_real_execution_blocked()
+        if blocked:
+            logger.info(f"👻 [TRAILING STOP GÜVENLİK KİLİDİ]: {block_reason}. Canlı TRADE_ACTION_SLTP emri kilitli.")
+            return []
+
         positions = mt5.positions_get()
         if not positions:
             return []
@@ -347,8 +407,8 @@ class MT5ExecutionRouter:
                         "sl": float(new_sl),
                         "tp": float(pos.tp),
                     }
-                    res = mt5.order_send(req)
-                    is_ok = res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
+                    ok, res, reason = self.safe_order_send(req)
+                    is_ok = ok and res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
                     event = {
                         "action": "TRAILING_UPDATE",
                         "ticket": pos.ticket,
@@ -356,7 +416,7 @@ class MT5ExecutionRouter:
                         "old_sl": current_sl,
                         "new_sl": new_sl,
                         "status": "SUCCESS" if is_ok else "FAILED",
-                        "comment": res.comment if res else "Error"
+                        "comment": res.comment if (res and hasattr(res, "comment")) else reason
                     }
                     self.telemetry.log_execution(event)
                     results.append(event)
@@ -374,8 +434,8 @@ class MT5ExecutionRouter:
                         "sl": float(new_sl),
                         "tp": float(pos.tp),
                     }
-                    res = mt5.order_send(req)
-                    is_ok = res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
+                    ok, res, reason = self.safe_order_send(req)
+                    is_ok = ok and res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
                     event = {
                         "action": "TRAILING_UPDATE",
                         "ticket": pos.ticket,
@@ -383,7 +443,7 @@ class MT5ExecutionRouter:
                         "old_sl": current_sl,
                         "new_sl": new_sl,
                         "status": "SUCCESS" if is_ok else "FAILED",
-                        "comment": res.comment if res else "Error"
+                        "comment": res.comment if (res and hasattr(res, "comment")) else reason
                     }
                     self.telemetry.log_execution(event)
                     results.append(event)

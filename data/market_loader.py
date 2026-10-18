@@ -47,6 +47,21 @@ class MarketLoader:
         self.cache_dir = cache_dir or (Path(__file__).resolve().parent.parent / "cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def validate_symbol_data(self, df: pd.DataFrame, min_bars: int = 50) -> tuple[bool, str]:
+        """D1 bar verisi bütünlüğünü ve yeterliliğini kontrol eder."""
+        if df is None or df.empty:
+            return False, "INSUFFICIENT_DATA: Veri seti boş"
+        if len(df) < min_bars:
+            return False, f"INSUFFICIENT_DATA: Yetersiz bar ({len(df)} < min {min_bars})"
+        for col in ["open", "high", "low", "close"]:
+            if col not in df.columns:
+                return False, f"INSUFFICIENT_DATA: Eksik kolon {col}"
+            if df[col].isnull().any():
+                return False, f"INSUFFICIENT_DATA: NaN değer bulundu ({col})"
+            if (df[col] <= 0).any():
+                return False, f"INSUFFICIENT_DATA: Sıfır veya negatif fiyat ({col})"
+        return True, "OK"
+
     def load_symbol_data(self, symbol: str, period: str = "5y", force_refresh: bool = False) -> pd.DataFrame:
         """
         yfinance üzerinden günlük (D1) barları çeker.

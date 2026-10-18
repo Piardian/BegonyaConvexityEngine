@@ -1,0 +1,202 @@
+[
+  {
+    "test_name": "test_1_1_default_config_is_shadow_and_blocked",
+    "category": "ORDER_SAFETY",
+    "status": "PASS",
+    "detail": "Varsayılan konfigürasyonda shadow_mode=True ve allow_real_orders=False doğrulanmıştır.",
+    "evidence": {
+      "shadow_mode": true,
+      "allow_real_orders": false,
+      "block_reason": "Gölge Modu (Shadow Mode) Aktif - Gerçek emir iletimi kilitli"
+    },
+    "timestamp": "2026-10-14T14:43:05.923609"
+  },
+  {
+    "test_name": "test_1_2_hostile_bypass_attempt_blocked_by_account_lock",
+    "category": "ORDER_SAFETY",
+    "status": "PASS",
+    "detail": "Bypass konfigürasyonu uygulandığında router hesap numarasını (26735345) ve sunucuyu tespit edip sert kilit uyguladı.",
+    "evidence": {
+      "blocked": true,
+      "reason": "Korumalı Gerçek Hesap (26735345 @ FivePercentOnline-Real) - Gerçek emir iletimi sert kilitli!"
+    },
+    "timestamp": "2026-10-14T14:43:05.940311"
+  },
+  {
+    "test_name": "test_1_3_execute_split_tickets_under_hostile_bypass_never_calls_order_send",
+    "category": "ORDER_SAFETY",
+    "status": "PASS",
+    "detail": "Bypass konfigürasyonunda execute_split_tickets çalıştırıldı; mt5.order_send 0 kez çağrıldı, sanal bilet üretildi.",
+    "evidence": {
+      "status": "SHADOW_FILLED",
+      "ticket_a": 178185955,
+      "ticket_b": 178185956
+    },
+    "timestamp": "2026-10-14T14:43:11.222825"
+  },
+  {
+    "test_name": "test_1_4_defense_in_depth_trailing_stop_audit",
+    "category": "ORDER_SAFETY",
+    "status": "PASS",
+    "detail": "update_runner_trailing_stops ortak güvenlik kilidi ve safe_order_send ile korumaya alındı; order_send 0 kez çağrıldı.",
+    "evidence": {
+      "vulnerability_present": false,
+      "order_send_called": false
+    },
+    "timestamp": "2026-10-14T14:43:11.235509"
+  },
+  {
+    "test_name": "test_1_5_fail_closed_on_mt5_disconnect_audit",
+    "category": "FAULT_TOLERANCE",
+    "status": "PASS",
+    "detail": "MT5 bağlantı kesintisi ve hesap doğrulama arızalarında sistemin kesin Fail-Closed (True) davrandığı kanıtlandı.",
+    "evidence": {
+      "blocked_when_disconnected": true,
+      "reason": "FAIL-CLOSED: MT5 terminali başlatılamadı veya bağlantı yok - Gerçek emir iletimi kilitli!"
+    },
+    "timestamp": "2026-10-14T14:43:11.249324"
+  },
+  {
+    "test_name": "test_2_1_risk_calculation_exact_half_percent",
+    "category": "RISK_LIMITS",
+    "status": "PASS",
+    "detail": "$10,000 hesapta işlem riski tam $50.00 (%0.5), bilet başına $25.00 (%0.25) olarak doğrulandı.",
+    "evidence": {
+      "balance": 10000.0,
+      "target_risk_usd": 50.0,
+      "ticket_a_risk": 25.0,
+      "ticket_b_risk": 25.0
+    },
+    "timestamp": "2026-10-14T14:43:11.249324"
+  },
+  {
+    "test_name": "test_2_2_portfolio_concurrency_cap_enforced_at_four",
+    "category": "RISK_LIMITS",
+    "status": "PASS",
+    "detail": "4 farklı sembolde 8 bilet açıkken eşzamanlı sembol sayısı 4 olarak hesaplandı ve 5. sembol kilitlendi.",
+    "evidence": {
+      "open_symbols": 4,
+      "max_allowed": 4,
+      "blocked": true
+    },
+    "timestamp": "2026-10-14T14:43:11.261688"
+  },
+  {
+    "test_name": "test_2_3_portfolio_heat_cap_enforced_at_three_percent",
+    "category": "RISK_LIMITS",
+    "status": "PASS",
+    "detail": "$300.00 açık risk varken yeni $50.00 işlem tavanı ($300.00) aştığı için engellendi.",
+    "evidence": {
+      "current_heat": 300.0,
+      "new_risk": 50.0,
+      "max_heat": 300.0,
+      "blocked": true
+    },
+    "timestamp": "2026-10-14T14:43:11.274544"
+  },
+  {
+    "test_name": "test_2_4_break_even_risk_release_in_heat_cap",
+    "category": "RISK_LIMITS",
+    "status": "PASS",
+    "detail": "sl == entry olan pozisyonun riski $0 sayılarak portföy ısı kapasitesi serbest bırakıldı.",
+    "evidence": {
+      "calculated_heat": 50.0
+    },
+    "timestamp": "2026-10-14T14:43:11.274544"
+  },
+  {
+    "test_name": "test_2_5_lot_splitting_minimum_volume_inflation_audit",
+    "category": "RISK_LIMITS",
+    "status": "PASS",
+    "detail": "Broker minimum lotu planlanan riski aştığında yukarı yuvarlama yapılmadığı ve işlemin güvenle reddedildiği kanıtlandı.",
+    "evidence": {
+      "sub_min_lot": null,
+      "split_below_2x_min": [
+        0.0,
+        0.0
+      ],
+      "valid_split": [
+        0.01,
+        0.01
+      ]
+    },
+    "timestamp": "2026-10-14T14:43:11.285821"
+  },
+  {
+    "test_name": "test_3_1_duplicate_order_state_lock",
+    "category": "TRADE_LIFECYCLE",
+    "status": "PASS",
+    "detail": "Mevcut EURUSD pozisyonu State Lock tarafından tespit edildi ve mükerrer işlem engellendi.",
+    "evidence": {
+      "symbol": "EURUSD",
+      "state_lock_active": true
+    },
+    "timestamp": "2026-10-14T14:43:11.296272"
+  },
+  {
+    "test_name": "test_3_2_shadow_ticket_lifecycle_tp_and_sl_closing",
+    "category": "TRADE_LIFECYCLE",
+    "status": "PASS",
+    "detail": "Gölge bilet yaşam döngüsü simüle edildi: TP bilet +2.0R ($50.00), SL bilet -1.0R (-$25.00) ile doğru kapandı ve telemetriye işlendi.",
+    "evidence": {
+      "tp_pnl_r": 2.0,
+      "sl_pnl_r": -1.0,
+      "remaining_tickets": 0
+    },
+    "timestamp": "2026-10-14T14:43:11.312308"
+  },
+  {
+    "test_name": "test_3_3_trailing_stop_advancement_logic",
+    "category": "TRADE_LIFECYCLE",
+    "status": "PASS",
+    "detail": "Runner stopu kâr yönünde 1.0750'den 1.0825'e yükseltildi; fiyat gerilediğinde stopun geriye çekilmesi başarıyla engellendi.",
+    "evidence": {
+      "up_new_sl": 1.0825,
+      "down_updates_count": 0
+    },
+    "timestamp": "2026-10-14T14:43:11.548504"
+  },
+  {
+    "test_name": "test_4_1_validate_symbol_data_insufficient_data_rejections",
+    "category": "DATA_INTEGRITY",
+    "status": "PASS",
+    "detail": "Tüm eksik, yetersiz (<50 bar), NaN ve negatif fiyat senaryoları INSUFFICIENT_DATA ile reddedildi.",
+    "evidence": {
+      "empty_res": "INSUFFICIENT_DATA: Veri seti boş",
+      "short_res": "INSUFFICIENT_DATA: Yetersiz bar (30 < min 50)",
+      "nan_res": "INSUFFICIENT_DATA: NaN değer bulundu (close)",
+      "neg_res": "INSUFFICIENT_DATA: Sıfır veya negatif fiyat (close)"
+    },
+    "timestamp": "2026-10-14T14:43:11.558050"
+  },
+  {
+    "test_name": "test_4_2_lifecycle_daemon_data_validation_coverage_audit",
+    "category": "DATA_INTEGRITY",
+    "status": "PASS",
+    "detail": "lifecycle_daemon.py D1 verilerini döngüye almadan önce MarketLoader.validate_symbol_data() çağrısı eklendi.",
+    "evidence": {
+      "validate_symbol_data_in_daemon": true
+    },
+    "timestamp": "2026-10-14T14:43:11.559172"
+  },
+  {
+    "test_name": "test_4_3_daemon_restart_recovery_from_state_file",
+    "category": "FAULT_TOLERANCE",
+    "status": "PASS",
+    "detail": "Daemon yeniden başlatıldığında biletlerin state dosyasından (%100 tutarlı) yüklendiği kanıtlandı.",
+    "evidence": {
+      "recovered_tickets_count": 1
+    },
+    "timestamp": "2026-10-14T14:43:11.584939"
+  },
+  {
+    "test_name": "test_4_4_corrupted_state_file_resilience",
+    "category": "FAULT_TOLERANCE",
+    "status": "PASS",
+    "detail": "Bozuk JSON içeren bilet dosyası güvenle yakalandı ve sistem çökmeden {} ile toparlandı.",
+    "evidence": {
+      "recovered_safely": true
+    },
+    "timestamp": "2026-10-14T14:43:11.599457"
+  }
+]

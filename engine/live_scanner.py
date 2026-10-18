@@ -33,7 +33,9 @@ class LiveConvexityScanner:
 
         for symbol in self.symbols:
             df = self.loader.load_symbol_data(symbol, period="1y")
-            if df.empty or len(df) < 50:
+            valid, reason = self.loader.validate_symbol_data(df, min_bars=50)
+            if not valid:
+                logger.warning(f"⚠️ [{symbol}] {reason} - Tarama atlandı.")
                 continue
 
             last_idx = len(df) - 1

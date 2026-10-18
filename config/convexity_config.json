@@ -3,7 +3,8 @@
   "timeframe": "1d",
   "backtest": {
     "initial_capital": 10000.0,
-    "risk_per_trade_pct": 2.0,
+    "risk_per_trade_pct": 0.5,
+    "max_portfolio_heat_pct": 3.0,
     "commission_spread_r_per_trade": 0.05,
     "start_year": 2021,
     "end_year": 2026,
@@ -57,7 +58,9 @@
   "execution": {
     "shadow_mode": true,
     "allow_real_orders": false,
-    "risk_per_trade_pct": 2.0,
+    "risk_per_trade_pct": 0.5,
+    "max_portfolio_heat_pct": 3.0,
+    "max_concurrent_open_positions": 4,
     "max_spread_multiplier": 2.0,
     "magic_scaler": 260901,
     "magic_runner": 260902

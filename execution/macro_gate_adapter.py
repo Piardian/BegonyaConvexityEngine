@@ -127,7 +127,11 @@ class MacroGateAdapter:
             paths.append(Path(self.custom_gate_path))
 
         curr = Path(__file__).resolve().parent.parent
-        # 1. Begonya ana proje kökündeki shared/macro_bias_gate.json
+        # 1. Begonya00 ve Begonya ana proje köklerindeki shared/macro_bias_gate.json
+        begonya00_root = Path(r"c:\Users\piard\Desktop\Begonya00")
+        paths.append(begonya00_root / "shared" / "macro_bias_gate.json")
+        paths.append(begonya00_root / "macro_engine" / "gateways" / "macro_bias_gate.json")
+
         begonya_root = curr.parent / "Begonya"
         paths.append(begonya_root / "shared" / "macro_bias_gate.json")
         paths.append(begonya_root / "macro_engine" / "gateways" / "macro_bias_gate.json")
@@ -140,21 +144,27 @@ class MacroGateAdapter:
         return paths
 
     def load_gate_payload(self) -> Optional[Dict[str, Any]]:
-        """Gate JSON dosyasını atomik ve önbellekli olarak okur."""
+        """Gate JSON dosyasını en güncel (freshest mtime) aday üzerinden atomik ve önbellekli olarak okur."""
+        existing = []
         for p in self.gate_paths:
-            if p.exists():
-                try:
-                    mtime = p.stat().st_mtime
-                    if self._cached_payload is not None and mtime == self._cached_mtime:
-                        return self._cached_payload
-                    with open(p, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    self._cached_payload = data
-                    self._cached_mtime = mtime
-                    return data
-                except Exception as e:
-                    logger.warning(f"Gate dosyası ({p}) okunamadı: {e}")
-                    continue
+            try:
+                if p.exists():
+                    existing.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        existing.sort(key=lambda item: item[0], reverse=True)
+        for mtime, p in existing:
+            try:
+                if self._cached_payload is not None and mtime == self._cached_mtime:
+                    return self._cached_payload
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._cached_payload = data
+                self._cached_mtime = mtime
+                return data
+            except Exception as e:
+                logger.warning(f"Gate dosyası ({p}) okunamadı: {e}")
+                continue
         return None
 
     def resolve_driver_score(self, driver: str, payload: Dict[str, Any]) -> Tuple[int, str]:

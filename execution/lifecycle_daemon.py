@@ -354,23 +354,27 @@ class TradeLifecycleManager:
         d1_market_cache = {}
         for sym in self.symbols:
             df = self.loader.load_symbol_data(sym, period="1y")
-            if not df.empty and len(df) >= 50:
-                broker_sym = self.router.mapper.resolve(sym)
-                last_bar = df.iloc[-1]
-                recent_high = df["high"].iloc[-5:].max()
-                recent_low = df["low"].iloc[-5:].min()
-                data_dict = {
-                    "df": df,
-                    "atr14": float(last_bar["atr14"]),
-                    "close": float(last_bar["close"]),
-                    "recent_high": float(recent_high),
-                    "recent_low": float(recent_low),
-                    "broker_sym": broker_sym,
-                    "is_active": True,
-                }
-                d1_market_cache[sym] = data_dict
-                if broker_sym:
-                    d1_market_cache[broker_sym] = data_dict
+            valid, reason = self.loader.validate_symbol_data(df, min_bars=50)
+            if not valid:
+                logger.warning(f"⚠️ [{sym}] {reason} - D1 yaşam döngüsünde güvenle atlandı.")
+                continue
+
+            broker_sym = self.router.mapper.resolve(sym)
+            last_bar = df.iloc[-1]
+            recent_high = df["high"].iloc[-5:].max()
+            recent_low = df["low"].iloc[-5:].min()
+            data_dict = {
+                "df": df,
+                "atr14": float(last_bar["atr14"]),
+                "close": float(last_bar["close"]),
+                "recent_high": float(recent_high),
+                "recent_low": float(recent_low),
+                "broker_sym": broker_sym,
+                "is_active": True,
+            }
+            d1_market_cache[sym] = data_dict
+            if broker_sym:
+                d1_market_cache[broker_sym] = data_dict
 
         # =========================================================================
         # 1. AŞAMA: DİNAMİK ROTASYON VE AKTİF LİSTE BELİRLEME
@@ -427,7 +431,10 @@ class TradeLifecycleManager:
         # MT5 Hesap Bakiyesini Al ve %2.0 Sabit Risk Hesapla
         acc = mt5.account_info() if mt5.initialize() else None
         balance = acc.balance if acc else self.config.get("backtest", {}).get("initial_capital", 10000.0)
-        risk_pct = self.config.get("execution", {}).get("risk_per_trade_pct", 2.0) / 100.0
+        risk_pct = self.config.get("execution", {}).get("risk_per_trade_pct", 0.5) / 100.0
+        max_heat_pct = self.config.get("execution", {}).get("max_portfolio_heat_pct", 3.0) / 100.0
+        max_heat_usd = round(balance * max_heat_pct, 2)
+        max_concurrent_pos = self.config.get("execution", {}).get("max_concurrent_open_positions", 4)
         target_risk_usd = round(balance * risk_pct, 2)
 
         for sym in self.symbols:
@@ -455,6 +462,21 @@ class TradeLifecycleManager:
                     print(f"   ⚠️ [STATE LOCK]: Bu sembolde zaten açık pozisyon/gölge bilet var. Çift işlem kilitlendi!")
                     continue
 
+                # Portföy Isı Tavanı ve Eşzamanlı Pozisyon Sınırı (Portfolio Heat Cap)
+                current_heat_usd = sum(
+                    float(t.get("risk_usd", 0.0)) for t in tracked_tickets.values()
+                    if t.get("sl") != t.get("entry")
+                )
+                open_symbol_count = len(set(t.get("generic_symbol") for t in tracked_tickets.values() if t.get("generic_symbol")))
+
+                if open_symbol_count >= max_concurrent_pos:
+                    print(f"   ⚠️ [PORTFOLIO CONCURRENCY CAP]: Maksimum eşzamanlı pozisyon sınırına ({max_concurrent_pos}) ulaşıldı. Yeni işlem kilitlendi!")
+                    continue
+
+                if current_heat_usd + target_risk_usd > max_heat_usd:
+                    print(f"   ⚠️ [PORTFOLIO HEAT CAP]: Açık risk (${current_heat_usd:.2f} + ${target_risk_usd:.2f}) tavanı (${max_heat_usd:.2f} / %{max_heat_pct*100:.1f}) aşıyor. Yeni işlem engellendi!")
+                    continue
+
                 mode_exec_str = "GÖLGE İNFAZ" if self.shadow_mode else "SAF MATEMATİKSEL İNFAZ"
                 print(f"   ✅ [{mode_exec_str}]: Bakiye: ${balance:,.2f} | Sabit Risk: %{risk_pct*100:.1f} (${target_risk_usd:,.2f})")
                 executed_signals.append(sig)
@@ -463,6 +485,10 @@ class TradeLifecycleManager:
                     print(f"   ➔ İki Bilet (Split Ticket) Hazırlanıyor: Bilet A (+2.0R TP) + Bilet B (Runner)...")
                     res = self.router.execute_split_tickets(sym, sig.direction, sig.entry_price, sig.initial_sl, target_risk_usd)
                     print(f"   ➔ İnfaz Durumu: {res.get('status')} | Bilet A: #{res.get('ticket_a')} | Bilet B: #{res.get('ticket_b')}")
+
+                    if res.get("status") in ("REJECTED_MIN_LOT_RISK", "REJECTED_SPLIT_LOT_RISK", "REJECTED_SPREAD", "REJECTED_PRICE_MISMATCH", "ERROR", "SKIPPED_EXISTING"):
+                        print(f"   ⚠️ [İŞLEM REDDEDİLDİ]: {res.get('reason')}")
+                        continue
 
                     is_virtual = res.get("is_shadow", self.shadow_mode)
                     if res.get("ticket_a"):
@@ -498,7 +524,13 @@ class TradeLifecycleManager:
                     self._save_tracked_tickets(tracked_tickets)
                 else:
                     lot = self.router.calculate_dynamic_lot(broker_sym or sym, sig.entry_price, sig.initial_sl, target_risk_usd)
-                    lot_a, lot_b = self.router.split_lot_sizes(broker_sym or sym, lot or 0.02)
+                    if not lot:
+                        print(f"   ⚠️ [Dry-Run Planı İptal]: Broker minimum lotu risk bütçesini aşıyor.")
+                        continue
+                    lot_a, lot_b = self.router.split_lot_sizes(broker_sym or sym, lot)
+                    if lot_a <= 0 or lot_b <= 0:
+                        print(f"   ⚠️ [Dry-Run Planı İptal]: Lot iki bilete bölünemedi (asgari hacim riski aşıyor).")
+                        continue
                     print(f"   ➔ [Dry-Run Planı]: Toplam {lot} Lot ➔ Bilet A: {lot_a} Lot (+2.0R TP) │ Bilet B: {lot_b} Lot (Runner)")
             else:
                 # Kırılıma yakın olanları radara ekle (%1.5 mesafe)

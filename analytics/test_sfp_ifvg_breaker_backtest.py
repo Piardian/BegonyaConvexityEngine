@@ -501,6 +501,7 @@ def run_sfp_ifvg_simulation(
                     if p_dir == "LONG":
                         if c_high >= tp1 and status == "OPEN":
                             p["status"] = "TP1_HIT"
+                            status = "TP1_HIT"
                             p["current_sl"] = entry
                             sl = entry
                         if c_high >= tp2:
@@ -515,6 +516,7 @@ def run_sfp_ifvg_simulation(
                     else:
                         if c_low <= tp1 and status == "OPEN":
                             p["status"] = "TP1_HIT"
+                            status = "TP1_HIT"
                             p["current_sl"] = entry
                             sl = entry
                         if c_low <= tp2:
